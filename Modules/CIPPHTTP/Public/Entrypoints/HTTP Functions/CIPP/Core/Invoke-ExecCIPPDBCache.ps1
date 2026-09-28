@@ -13,6 +13,11 @@ function Invoke-ExecCIPPDBCache {
     $Name = $Request.Query.Name
     $Types = $Request.Query.Types
 
+    $ParsedTypes = @()
+    if (-not [string]::IsNullOrWhiteSpace($Types)) {
+        $ParsedTypes = @($Types -split ',' | ForEach-Object { $_.Trim() } | Where-Object { -not [string]::IsNullOrWhiteSpace($_) -and $_ -ne 'None' })
+    }
+
     Write-Information "ExecCIPPDBCache called with Name: '$Name', TenantFilter: '$TenantFilter', Types: '$Types'"
 
     try {
@@ -22,6 +27,19 @@ function Invoke-ExecCIPPDBCache {
 
         if ([string]::IsNullOrEmpty($TenantFilter)) {
             throw 'TenantFilter parameter is required'
+        }
+
+        # A derived cache type has no collector of its own — it is produced as a side-effect of
+        # another collector (e.g. SharePointSiteListing by Set-CIPPDBCacheSharePointSiteUsage). The
+        # registry's 'collectedBy' names that producing collector, so a run of the derived type runs
+        # it and populates the derived data.
+        $CacheTypesPath = Join-Path $env:CIPPRootPath 'Config/CIPPDBCacheTypes.json'
+        if (Test-Path $CacheTypesPath) {
+            $CollectedBy = ((Get-Content $CacheTypesPath -Raw | ConvertFrom-Json) | Where-Object { $_.type -eq $Name }).collectedBy
+            if ($CollectedBy) {
+                Write-Information "ExecCIPPDBCache: '$Name' is a derived cache type; running its producing collector '$CollectedBy'"
+                $Name = "$CollectedBy"
+            }
         }
 
         # Validate the function exists — on HttpOnly workers CIPPDB module isn't loaded,
@@ -66,8 +84,8 @@ function Invoke-ExecCIPPDBCache {
                     QueueId      = $Queue.RowKey
                 }
                 # Add Types parameter if provided
-                if ($Types) {
-                    $BatchItem | Add-Member -NotePropertyName 'Types' -NotePropertyValue @($Types -split ',') -Force
+                if ($ParsedTypes.Count -gt 0) {
+                    $BatchItem | Add-Member -NotePropertyName 'Types' -NotePropertyValue $ParsedTypes -Force
                 }
                 $BatchItem
             }
@@ -91,8 +109,8 @@ function Invoke-ExecCIPPDBCache {
                 QueueId      = $Queue.RowKey
             }
             # Add Types parameter if provided
-            if ($Types) {
-                $BatchItem | Add-Member -NotePropertyName 'Types' -NotePropertyValue @($Types -split ',') -Force
+            if ($ParsedTypes.Count -gt 0) {
+                $BatchItem | Add-Member -NotePropertyName 'Types' -NotePropertyValue $ParsedTypes -Force
             }
 
             $InputObject = [PSCustomObject]@{
